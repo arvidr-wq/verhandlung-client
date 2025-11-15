@@ -1,27 +1,39 @@
 // ws-server.js
-// Einfacher WebSocket-Server, der Nachrichten an alle anderen Clients weitergibt
+// Einfacher Broadcast-WebSocket-Server für das Verhandlungsspiel
 
 const WebSocket = require("ws");
 
-// Der Server hört auf Port 5174
-const PORT = 5174;
+// Render (und andere Plattformen) geben den Port über process.env.PORT vor.
+// Lokal verwenden wir Port 5174 wie bisher.
+const PORT = process.env.PORT || 5174;
+
 const wss = new WebSocket.Server({ port: PORT });
 
-console.log("[WS] WebSocket-Server läuft auf ws://localhost:" + PORT);
+console.log(`[ws-server] Listening on ws://0.0.0.0:${PORT}`);
 
 wss.on("connection", (ws) => {
-  console.log("[WS] Client verbunden.");
+  console.log("[ws-server] Client connected");
 
-  ws.on("message", (message) => {
-    // Nachricht an alle anderen weiterleiten
-    for (const client of wss.clients) {
-      if (client !== ws && client.readyState === WebSocket.OPEN) {
-        client.send(message.toString());
-      }
+  ws.on("message", (data) => {
+    let msg;
+    try {
+      msg = JSON.parse(data.toString());
+    } catch (err) {
+      console.error("[ws-server] Invalid JSON", err);
+      return;
     }
+
+    console.log("[ws-server] Message in:", msg);
+
+    // An alle anderen Clients im selben Spiel (session) broadcasten
+    wss.clients.forEach((client) => {
+      if (client !== ws && client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(msg));
+      }
+    });
   });
 
   ws.on("close", () => {
-    console.log("[WS] Client getrennt.");
+    console.log("[ws-server] Client disconnected");
   });
 });
