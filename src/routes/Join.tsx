@@ -8,7 +8,9 @@ import {
   playArgument,
   reactToOpponent,
   subscribeHost,
-  type AnyMsg
+  sendTrustInvest,
+  type AnyMsg,
+  type StateSnapshot
 } from "../lib/transport";
 
 type Card = {
@@ -17,25 +19,26 @@ type Card = {
   used: boolean;
 };
 
-function teamLabel(team: Team) {
-  return team === "A" ? "Team A" : "Team B";
+function initialHand(): Card[] {
+  return [
+    { id: 1, strength: 1, used: false },
+    { id: 2, strength: 3, used: false },
+    { id: 3, strength: 5, used: false },
+    { id: 4, strength: 6, used: false },
+    { id: 5, strength: 7, used: false },
+    { id: 6, strength: 8, used: false },
+    { id: 7, strength: 9, used: false },
+    { id: 8, strength: 10, used: false }
+  ];
 }
 
-// 8 Argumente aus den Stärken 1–10 (leicht zufällig gemischt)
-function initialHand(): Card[] {
-  const strengths = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-  // einfache Shuffle-Funktion
-  for (let i = strengths.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [strengths[i], strengths[j]] = [strengths[j], strengths[i]];
-  }
-  const picked = strengths.slice(0, 8);
-  return picked.map((s, idx) => ({
-    id: idx + 1,
-    strength: s,
-    used: false
-  }));
+function clampPercent(v: number): number {
+  if (v < 0) return 0;
+  if (v > 100) return 100;
+  return v;
 }
+
+const INVEST_OPTIONS = [0, 3, 5, 7, 10];
 
 export default function Join() {
   const [sp] = useSearchParams();
@@ -43,261 +46,451 @@ export default function Join() {
   const session = sp.get("s") ?? "TEST";
 
   const [round, setRound] = useState(1);
+  const [hand, setHand] = useState<Card[]>(initialHand);
 
-  // Hand mit 8 Argument-Karten
-  const [hand, setHand] = useState<Card[]>(() => initialHand());
-  const [selectedCardId, setSelectedCardId] = useState<number | null>(null);
+  const [selectedCardId, setSelectedCardId] = useState<number | null>(
+    null
+  );
+  const selectedCard = hand.find((c) => c.id === selectedCardId) ?? null;
 
-  // Spielweise
   const [mode, setMode] = useState<Mode>("fair");
   const [argSent, setArgSent] = useState(false);
 
-  // Reveal & Reaktion
-  const [reveal, setReveal] = useState<null | "weak" | "medium" | "strong">(null);
-  const [reaction, setReaction] = useState<Reaction | null>(null);
+  const [reveal, setReveal] =
+    useState<null | "weak" | "medium" | "strong">(null);
   const [reactionEnabled, setReactionEnabled] = useState(false);
-
   const [status, setStatus] = useState<string>(
-    "Wähle eines deiner Argumente und sende es."
+    "Wähle ein Argument und sende es."
   );
 
-  const selectedCard = hand.find(c => c.id === selectedCardId) ?? null;
+  const [score, setScore] = useState(0);
+  const [fairScore, setFairScore] = useState(0);
+  const [trust, setTrust] = useState(50);
 
-  // auf Nachrichten des Hosts hören
+  const [selectedInvest, setSelectedInvest] = useState<number>(0);
+  const [investSent, setInvestSent] = useState(false);
+
+  const [summary, setSummary] =
+    useState<StateSnapshot["summary"] | null>(null);
+
+  const isTrustRound = round === 4 || round === 8;
+  const isFinished = summary !== null;
+
   useEffect(() => {
-    // Bei Session-Wechsel alles zurücksetzen
-    setRound(1);
-    setHand(initialHand());
-    setSelectedCardId(null);
-    setMode("fair");
-    setArgSent(false);
-    setReveal(null);
-    setReaction(null);
-    setReactionEnabled(false);
-    setStatus("Wähle eines deiner Argumente und sende es.");
-
-    const stop = subscribeHost(session, (m: AnyMsg) => {
-      // REVEAL: jetzt darf reagiert werden
-      if (m.type === "reveal" && m.to === team) {
-        setReveal(m.oppCategory);
+    const stop = subscribeHost(session, (msg: AnyMsg) => {
+      if (msg.type === "reveal" && msg.to === team) {
+        setReveal(msg.oppCategory);
         setReactionEnabled(true);
-        setStatus("Reveal erhalten – reagiere jetzt auf das Argument der Gegenseite.");
+        setStatus("Reveal erhalten – reagiere jetzt.");
       }
 
-      // NÄCHSTE RUNDE
-      if (m.type === "next") {
-        setRound(r => r + 1);
-        setArgSent(false);
+      if (msg.type === "next") {
+        setRound(msg.round);
         setReveal(null);
-        setReaction(null);
-        setReactionEnabled(false);
+        setArgSent(false);
         setSelectedCardId(null);
-        setStatus("Neue Runde: Wähle eines deiner verbleibenden Argumente.");
-        // Hand bleibt erhalten, nur „used“-Status steuert, was noch spielbar ist
+        setReactionEnabled(false);
+        setSelectedInvest(0);
+        setInvestSent(false);
+        setStatus("Neue Runde – bitte Argument wählen.");
       }
 
-      // RESET
-      if (m.type === "reset") {
+      if (msg.type === "reset") {
         setRound(1);
         setHand(initialHand());
-        setSelectedCardId(null);
-        setMode("fair");
         setArgSent(false);
+        setSelectedCardId(null);
         setReveal(null);
-        setReaction(null);
         setReactionEnabled(false);
-        setStatus("Session zurückgesetzt. Wähle eines deiner Argumente.");
+        setSelectedInvest(0);
+        setInvestSent(false);
+        setSummary(null);
+        setStatus("Session zurückgesetzt.");
+        setScore(0);
+        setFairScore(0);
+        setTrust(50);
+      }
+
+      if (msg.type === "stateUpdate") {
+        const self = team === "A" ? msg.A : msg.B;
+        setScore(self.score ?? 0);
+        setFairScore(self.fairScore ?? 0);
+        setTrust(self.trust ?? 50);
+        if (self.summary) {
+          setSummary(self.summary);
+          setStatus("Spiel beendet – Auswertung verfügbar.");
+        }
       }
     });
 
-    return () => {
-      stop();
-    };
+    return () => stop();
   }, [session, team]);
 
- // Argument senden
-const handleSendArgument = () => {
-  if (argSent) return;
-  if (!selectedCard) {
-    setStatus("Bitte zuerst eines deiner Argumente auswählen.");
-    return;
-  }
-
-  playArgument(session, {
-    who: team,
-    base: selectedCard.strength,
-    mode,
-  });
-
-  // Karte als „verbraucht“ markieren
-  setHand((h) =>
-    h.map((c) =>
-      c.id === selectedCard.id ? { ...c, used: true } : c
-    )
-  );
-
-  setArgSent(true);
-
-  // 🔥 WICHTIG: Reaktion sofort ermöglichen
-  setReactionEnabled(true);
-
-  setStatus(
-    "Argument gesendet – du kannst gleich auf das Argument der Gegenseite reagieren."
-  );
-};
-
-  // Reaktion senden
-  const handleReaction = (value: Reaction) => {
-    if (!reactionEnabled) return;
-    setReaction(value);
-    reactToOpponent(session, {
+  const sendArg = () => {
+    if (isFinished || isTrustRound) return;
+    if (!selectedCard) {
+      setStatus("Bitte Karte auswählen.");
+      return;
+    }
+    playArgument(session, {
       who: team,
-      reaction: value
+      base: selectedCard.strength,
+      mode
     });
-    setReactionEnabled(false);
-    setStatus("Reaktion gesendet – warte auf die nächste Runde.");
+    setHand((h) =>
+      h.map((c) =>
+        c.id === selectedCard.id ? { ...c, used: true } : c
+      )
+    );
+    setArgSent(true);
+    setStatus("Argument gesendet – warte auf Reveal.");
   };
 
-  const revealText =
-    reveal === "weak"
-      ? "Das Argument der Gegenseite wirkt eher schwach."
-      : reveal === "medium"
-      ? "Das Argument der Gegenseite wirkt mittelstark."
-      : reveal === "strong"
-      ? "Das Argument der Gegenseite wirkt sehr stark."
-      : "Noch kein Reveal – warte, bis beide gesendet haben.";
+  const react = (r: Reaction) => {
+    if (isFinished || isTrustRound) return;
+    if (!reactionEnabled) return;
+    reactToOpponent(session, {
+      who: team,
+      reaction: r
+    });
+    setReactionEnabled(false);
+    setStatus("Reaktion gesendet – warte auf nächste Runde.");
+  };
+
+  const sendInvestment = () => {
+    if (isFinished || !isTrustRound) return;
+    if (investSent) return;
+
+    const clean = Math.max(
+      0,
+      Math.min(10, Math.round(selectedInvest))
+    );
+    sendTrustInvest(session, team, clean);
+    setInvestSent(true);
+    setStatus(
+      `Investition (${clean}%) gesendet – warte auf nächste Runde.`
+    );
+  };
+
+  const diff = score - fairScore;
+  const scorePercent = clampPercent(score);
+  const fairPercent = clampPercent(fairScore);
+  const trustPercent = clampPercent(trust);
+
+  const renderSummary = () => {
+    if (!summary) return null;
+    const { cooperation, fairness, sensitivity, opportunism } = summary;
+
+    const level = (v: number, highIsGood: boolean) => {
+      if (v < 33) return highIsGood ? "niedrig" : "hoch";
+      if (v < 66) return "mittel";
+      return highIsGood ? "hoch" : "niedrig";
+    };
+
+    const explain = (label: string, value: number) => {
+      if (label === "Kooperationsindex") {
+        if (value < 33)
+          return "Du blockierst die Gegenseite häufig und gehst eher selten auf Angebote ein.";
+        if (value < 66)
+          return "Du hältst die Balance zwischen Entgegenkommen und Blockieren.";
+        return "Du gehst meist auf Angebote der Gegenseite ein und spielst deutlich kooperativ.";
+      }
+      if (label === "Fairnessindex") {
+        if (value < 33)
+          return "Du spielst deine Argumente häufig stärker aus, als sie eigentlich sind.";
+        if (value < 66)
+          return "Du mischst faire und leicht übertriebene Argumente.";
+        return "Du spielst deine Argumente überwiegend fair und nur selten übertrieben.";
+      }
+      if (label === "Reaktionssensibilität") {
+        if (value < 33)
+          return "Dein Verhalten verändert sich kaum, wenn Vertrauen steigt oder sinkt.";
+        if (value < 66)
+          return "Du reagierst teilweise auf Veränderungen im Vertrauen der Gegenseite.";
+        return "Du reagierst deutlich auf Vertrauensaufbau der Gegenseite und passt dein Verhalten entsprechend an.";
+      }
+      if (label === "Opportunismusindex") {
+        if (value < 33)
+          return "Du nutzt Vertrauen der Gegenseite kaum für kurzfristige Vorteile aus.";
+        if (value < 66)
+          return "Du nutzt Chancen situativ, ohne durchgehend opportunistisch zu agieren.";
+        return "Du nutzt hohes Vertrauen der Gegenseite häufig für eigene Vorteile.";
+      }
+      return "";
+    };
+
+    const items = [
+      {
+        label: "Kooperationsindex",
+        value: cooperation,
+        good: true
+      },
+      {
+        label: "Fairnessindex",
+        value: fairness,
+        good: true
+      },
+      {
+        label: "Reaktionssensibilität",
+        value: sensitivity,
+        good: true
+      },
+      {
+        label: "Opportunismusindex",
+        value: opportunism,
+        good: false
+      }
+    ];
+
+    return (
+      <section className="border rounded-xl p-4 bg-white shadow mt-6">
+        <h2 className="font-semibold mb-2 text-sm">
+          Auswertung deines Spielstils
+        </h2>
+        <p className="text-xs text-gray-600 mb-3">
+          Alle Werte liegen zwischen 0 und 100. 50 ist der neutrale
+          Bereich. Höhere Werte bedeuten mehr von der jeweiligen
+          Eigenschaft (beim Opportunismus eher vorsichtig interpretieren).
+        </p>
+
+        {items.map((item) => (
+          <div key={item.label} className="mb-3">
+            <div className="flex justify-between text-xs mb-1">
+              <span>{item.label}</span>
+              <span>{item.value.toFixed(0)} / 100</span>
+            </div>
+            <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden mb-1">
+              <div
+                className="h-2"
+                style={{
+                  width: `${clampPercent(item.value)}%`,
+                  background: "#000"
+                }}
+              />
+            </div>
+            <div className="text-[11px] text-gray-600 mb-0.5">
+              Niveau: {level(item.value, item.good)}
+            </div>
+            <div className="text-[11px] text-gray-700">
+              {explain(item.label, item.value)}
+            </div>
+          </div>
+        ))}
+
+        <p className="text-xs text-gray-700 mt-3">
+          Nutzt diese Auswertung im Plenum: Wo habt ihr Vertrauen
+          aufgebaut, wo eher gepokert, wo liegen Chancen, euch
+          kooperativer oder strategischer aufzustellen?
+        </p>
+      </section>
+    );
+  };
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
-      <nav className="mb-4 text-sm text-gray-500 flex gap-2">
-        <Link to="/">Start</Link>
-        <span>/</span>
-        <span>Join</span>
-        <span>/</span>
-        <span className="font-semibold">{teamLabel(team)}</span>
+      <nav className="mb-4 text-sm text-gray-500">
+        <Link to="/">Start</Link> / Join ({team})
       </nav>
 
-      <header className="mb-4">
-        <h1 className="text-2xl font-semibold">
-          Join · {teamLabel(team)}
-        </h1>
-        <p className="text-sm text-gray-500">
-          Session <span className="font-mono">{session}</span> · Runde {round}/10{" "}
-          <Link
-            to={`/host?s=${encodeURIComponent(session)}`}
-            className="underline"
-          >
-            · Host öffnen
-          </Link>
-        </p>
-      </header>
+      <h1 className="text-xl font-semibold mb-4">
+        Runde {round} / 10 – Team {team}
+      </h1>
 
-      {/* 1) Argument wählen */}
-      <section className="border rounded-xl p-4 bg-white shadow-sm mb-4">
-        <h2 className="font-semibold mb-3 text-sm">1) Dein Argument wählen</h2>
+      {/* eigene Kennzahlen */}
+      <div className="border rounded-xl p-4 bg-white shadow mb-6">
+        <div className="text-sm font-semibold mb-1">
+          Team {team} – eigene Werte
+        </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-          {hand.map(card => {
-            const isSelected = selectedCardId === card.id;
-            return (
+        <div className="text-[11px] mb-1">Score</div>
+        <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden mb-1">
+          <div
+            className="h-2"
+            style={{ width: `${scorePercent}%`, background: "#000" }}
+          />
+        </div>
+        <div className="text-xs mb-2">Score: {score.toFixed(1)}</div>
+
+        <div className="text-[11px] mb-1">Fair-Score</div>
+        <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden mb-1">
+          <div
+            className="h-2"
+            style={{ width: `${fairPercent}%`, background: "#555" }}
+          />
+        </div>
+        <div className="text-xs mb-2">
+          Fair-Score (wenn beide fair gespielt hätten):{" "}
+          {fairScore.toFixed(1)}
+        </div>
+
+        <div className="text-xs mb-3">
+          Δ (aktuell − fair): {diff.toFixed(1)}
+        </div>
+
+        <div className="text-[11px] mb-1">Trust</div>
+        <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden mb-1">
+          <div
+            className="h-2"
+            style={{ width: `${trustPercent}%`, background: "#2563eb" }}
+          />
+        </div>
+        <div className="text-xs text-gray-500">
+          Trust: {trust.toFixed(0)}
+        </div>
+      </div>
+
+      {isFinished ? (
+        renderSummary()
+      ) : isTrustRound ? (
+        <section className="border rounded-xl p-4 bg-white shadow mb-6">
+          <h2 className="font-semibold mb-2 text-sm">
+            Trust-Runde – Investition in Vertrauen
+          </h2>
+          <p className="text-xs text-gray-600 mb-3">
+            In dieser Runde spielst du kein Argument. Du kannst einen
+            Prozentsatz deines Scores investieren, damit die Gegenseite
+            mehr Vertrauen in dich gewinnt.
+          </p>
+
+          <div className="flex flex-wrap gap-2 mb-3 text-sm">
+            {INVEST_OPTIONS.map((opt) => (
               <button
-                key={card.id}
+                key={opt}
                 type="button"
-                onClick={() => setSelectedCardId(card.id)}
-                disabled={argSent || card.used}
+                disabled={investSent}
+                onClick={() => setSelectedInvest(opt)}
                 className={[
-                  "border rounded-lg px-2 py-2 text-xs text-left",
-                  card.used ? "bg-gray-100 text-gray-400" : "bg-white",
-                  isSelected && !card.used ? "border-black" : "border-gray-200",
-                  argSent ? "cursor-default" : "cursor-pointer"
+                  "px-3 py-1 border rounded text-xs",
+                  selectedInvest === opt
+                    ? "border-black"
+                    : "border-gray-300",
+                  investSent ? "bg-gray-200 text-gray-400" : "bg-white"
                 ].join(" ")}
               >
-                <div className="font-semibold">Argument {card.id}</div>
-                <div>Stärke: {card.strength}</div>
-                {card.used && <div>(bereits gespielt)</div>}
+                {opt}%
               </button>
-            );
-          })}
-        </div>
+            ))}
+          </div>
 
-        {/* Spielweise */}
-        <div className="flex flex-wrap gap-4 text-sm mb-3">
-          <label className="flex items-center gap-1">
-            <input
-              type="radio"
-              name="mode"
-              value="fair"
-              checked={mode === "fair"}
-              onChange={() => setMode("fair")}
-              disabled={argSent}
-            />
-            fair
-          </label>
-          <label className="flex items-center gap-1">
-            <input
-              type="radio"
-              name="mode"
-              value="leicht"
-              checked={mode === "leicht"}
-              onChange={() => setMode("leicht")}
-              disabled={argSent}
-            />
-            leicht übertrieben
-          </label>
-          <label className="flex items-center gap-1">
-            <input
-              type="radio"
-              name="mode"
-              value="deutlich"
-              checked={mode === "deutlich"}
-              onChange={() => setMode("deutlich")}
-              disabled={argSent}
-            />
-            deutlich übertrieben
-          </label>
-        </div>
-
-        <button
-          onClick={handleSendArgument}
-          disabled={argSent}
-          className="px-4 py-2 rounded bg-black text-white text-sm disabled:bg-gray-300"
-        >
-          Argument senden
-        </button>
-      </section>
-
-      {/* 2) Reaktion */}
-      <section className="border rounded-xl p-4 bg-white shadow-sm mb-4">
-        <h2 className="font-semibold mb-2 text-sm">2) Reaktion auf Gegner</h2>
-        <p className="text-xs text-gray-500 mb-3">{revealText}</p>
-
-        <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => handleReaction("annehmen")}
-            disabled={!reactionEnabled}
-            className="px-3 py-2 text-xs rounded border bg-white disabled:bg-gray-100 disabled:text-gray-400"
+            onClick={sendInvestment}
+            disabled={investSent}
+            className="px-4 py-2 text-sm bg-black text-white rounded disabled:bg-gray-300"
           >
-            annehmen
+            Investition senden
           </button>
-          <button
-            onClick={() => handleReaction("zurückstellen")}
-            disabled={!reactionEnabled}
-            className="px-3 py-2 text-xs rounded border bg-white disabled:bg-gray-100 disabled:text-gray-400"
-          >
-            zurückstellen
-          </button>
-          <button
-            onClick={() => handleReaction("ablehnen")}
-            disabled={!reactionEnabled}
-            className="px-3 py-2 text-xs rounded border bg-white disabled:bg-gray-100 disabled:text-gray-400"
-          >
-            ablehnen
-          </button>
-        </div>
-      </section>
+        </section>
+      ) : (
+        <>
+          {/* Argument wählen */}
+          <section className="border rounded-xl p-4 bg-white shadow mb-6">
+            <h2 className="font-semibold mb-2 text-sm">
+              1) Argument wählen
+            </h2>
 
-      {/* Status */}
-      <div className="text-xs text-gray-600">{status}</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+              {hand.map((card) => (
+                <button
+                  key={card.id}
+                  disabled={card.used || argSent}
+                  onClick={() => setSelectedCardId(card.id)}
+                  className={[
+                    "border rounded px-2 py-2 text-xs",
+                    selectedCardId === card.id
+                      ? "border-black"
+                      : "border-gray-300",
+                    card.used ? "bg-gray-200 text-gray-400" : "bg-white"
+                  ].join(" ")}
+                >
+                  Argument {card.id}
+                  <br /> Stärke {card.strength}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-4 text-sm mb-3">
+              <label>
+                <input
+                  type="radio"
+                  checked={mode === "fair"}
+                  onChange={() => setMode("fair")}
+                  disabled={argSent}
+                />{" "}
+                fair
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  checked={mode === "leicht"}
+                  onChange={() => setMode("leicht")}
+                  disabled={argSent}
+                />{" "}
+                leicht
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  checked={mode === "deutlich"}
+                  onChange={() => setMode("deutlich")}
+                  disabled={argSent}
+                />{" "}
+                deutlich
+              </label>
+            </div>
+
+            <button
+              onClick={sendArg}
+              disabled={argSent}
+              className="px-4 py-2 text-sm bg-black text-white rounded disabled:bg-gray-300"
+            >
+              Argument senden
+            </button>
+          </section>
+
+          {/* Reaktion */}
+          <section className="border rounded-xl p-4 bg-white shadow">
+            <h2 className="font-semibold mb-2 text-sm">
+              2) Reaktion auf Gegner
+            </h2>
+
+            <p className="text-xs text-gray-600 mb-2">
+              {reveal === null
+                ? "Warte auf Reveal..."
+                : reveal === "weak"
+                ? "Gegnerisches Argument wirkt schwach."
+                : reveal === "medium"
+                ? "Gegnerisches Argument wirkt mittel."
+                : "Gegnerisches Argument wirkt STARK."}
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                disabled={!reactionEnabled}
+                onClick={() => react("annehmen")}
+                className="px-3 py-1 text-xs border rounded bg-white disabled:text-gray-400"
+              >
+                annehmen
+              </button>
+              <button
+                disabled={!reactionEnabled}
+                onClick={() => react("zurückstellen")}
+                className="px-3 py-1 text-xs border rounded bg-white disabled:text-gray-400"
+              >
+                zurückstellen
+              </button>
+              <button
+                disabled={!reactionEnabled}
+                onClick={() => react("ablehnen")}
+                className="px-3 py-1 text-xs border rounded bg-white disabled:text-gray-400"
+              >
+                ablehnen
+              </button>
+            </div>
+          </section>
+        </>
+      )}
+
+      <div className="text-xs text-gray-600 mt-4">{status}</div>
     </div>
   );
 }
