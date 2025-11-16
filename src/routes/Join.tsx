@@ -77,13 +77,19 @@ export default function Join() {
   const isFinished = summary !== null;
 
   useEffect(() => {
+    console.log("[join] subscribe for session", session, "team", team);
+
     const stop = subscribeHost(session, (msg: AnyMsg) => {
+      console.log("[join] incoming", msg);
+
+      // Reveal kommt vom Host, sagt: wie stark wirkt das gegnerische Argument?
       if (msg.type === "reveal" && msg.to === team) {
         setReveal(msg.oppCategory);
         setReactionEnabled(true);
         setStatus("Reveal erhalten – reagiere jetzt.");
       }
 
+      // Host sagt: neue Runde
       if (msg.type === "next") {
         setRound(msg.round);
         setReveal(null);
@@ -95,6 +101,7 @@ export default function Join() {
         setStatus("Neue Runde – bitte Argument wählen.");
       }
 
+      // Host setzt alles zurück
       if (msg.type === "reset") {
         setRound(1);
         setHand(initialHand());
@@ -111,6 +118,7 @@ export default function Join() {
         setTrust(50);
       }
 
+      // Laufende Werte + Abschluss-Auswertung
       if (msg.type === "stateUpdate") {
         const self = team === "A" ? msg.A : msg.B;
         setScore(self.score ?? 0);
@@ -123,7 +131,9 @@ export default function Join() {
       }
     });
 
-    return () => stop();
+    return () => {
+      stop();
+    };
   }, [session, team]);
 
   const sendArg = () => {
@@ -148,7 +158,10 @@ export default function Join() {
 
   const react = (r: Reaction) => {
     if (isFinished || isTrustRound) return;
-    if (!reactionEnabled) return;
+    if (!reactionEnabled) {
+      console.log("[join] reaction clicked but not enabled");
+      return;
+    }
     reactToOpponent(session, {
       who: team,
       reaction: r

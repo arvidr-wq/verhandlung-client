@@ -1,6 +1,6 @@
 // src/lib/transport.ts
 // ------------------------------------------------------------
-// WebSocket-Client für Host & Join
+// WebSocket-Client für Host & Spieler (Join)
 // ------------------------------------------------------------
 
 export type Team = "A" | "B";
@@ -89,39 +89,39 @@ export type AnyMsg =
 let socket: WebSocket | null = null;
 let handlers: Array<(msg: AnyMsg) => void> = [];
 
-// Entscheidet, welche WS-URL wir benutzen
+// HILFSFUNKTION: Entscheidet, ob wir lokal oder online sind
 function getWebSocketUrl(): string {
-  const onlineUrl = import.meta.env.VITE_WS_URL as string | undefined;
-
-  // 1) Wenn eine Online-URL per Env gesetzt ist, IMMER benutzen
-  if (onlineUrl && onlineUrl.startsWith("wss://")) {
-    console.log("[transport] using ONLINE ws url:", onlineUrl);
-    return onlineUrl;
-  }
-
-  // 2) Sonst: lokaler Betrieb (Seminar, eigener Laptop)
   const host = window.location.hostname || "localhost";
 
-  const isLocal =
+  // Erkennen: lokaler Betrieb (Seminar, dein Mac als Server)
+  const isLocalHost =
     host === "localhost" ||
     host === "127.0.0.1" ||
     host.startsWith("192.168.") ||
     host.startsWith("10.") ||
     host.endsWith(".local");
 
-  if (isLocal) {
-    const url = `ws://${host}:5174`;
-    console.log("[transport] using LOCAL ws url:", url);
-    return url;
+  if (isLocalHost) {
+    const localUrl = `ws://${host}:5174`;
+    console.log("[transport] using LOCAL ws url:", localUrl);
+    return localUrl;
   }
 
-  // 3) Notfall-Fallback – falls Env nicht gesetzt ist
+  // ONLINE-Betrieb: URL aus ENV, sonst Fallback auf Render
+  const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
   const fallback = "wss://verhandlung-ws-server.onrender.com";
-  console.warn(
-    "[transport] WARNING: VITE_WS_URL fehlt – nutze Fallback:",
-    fallback
-  );
-  return fallback;
+
+  const finalUrl = envUrl && envUrl.trim().length > 0 ? envUrl : fallback;
+  if (!envUrl) {
+    console.warn(
+      "[transport] WARNING: VITE_WS_URL fehlt – nutze Fallback:",
+      `"${fallback}"`
+    );
+  } else {
+    console.log("[transport] using ONLINE ws url:", finalUrl);
+  }
+
+  return finalUrl;
 }
 
 function ensureSocket() {
@@ -134,7 +134,7 @@ function ensureSocket() {
   }
 
   const url = getWebSocketUrl();
-  console.log("[transport] connecting to", url);
+  console.log("[transport] connecting to", `"${url}"`);
 
   socket = new WebSocket(url);
 
@@ -144,21 +144,27 @@ function ensureSocket() {
   socket.onmessage = (ev) => {
     try {
       const msg: AnyMsg = JSON.parse(ev.data);
+      console.log("[transport] incoming msg:", msg);
       handlers.forEach((fn) => fn(msg));
     } catch (err) {
-      console.error("WS parse error", err);
+      console.error("[transport] WS parse error", err);
     }
   };
 }
 
 function send(msg: AnyMsg) {
   ensureSocket();
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(msg));
-  } else {
-    // kleiner Retry, falls der Socket noch am Verbinden ist
-    setTimeout(() => send(msg), 200);
-  }
+  const payload = JSON.stringify(msg);
+  const doSend = () => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      console.log("[transport] sending:", msg);
+      socket.send(payload);
+    } else {
+      // kleine Verzögerung & Retry
+      setTimeout(doSend, 200);
+    }
+  };
+  doSend();
 }
 
 // ---------------------------------------------
