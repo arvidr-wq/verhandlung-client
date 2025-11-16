@@ -89,36 +89,39 @@ export type AnyMsg =
 let socket: WebSocket | null = null;
 let handlers: Array<(msg: AnyMsg) => void> = [];
 
-// HILFSFUNKTION: Entscheidet, ob wir lokal oder online sind
+// Entscheidet, welche WS-URL wir benutzen
 function getWebSocketUrl(): string {
+  const onlineUrl = import.meta.env.VITE_WS_URL as string | undefined;
+
+  // 1) Wenn eine Online-URL per Env gesetzt ist, IMMER benutzen
+  if (onlineUrl && onlineUrl.startsWith("wss://")) {
+    console.log("[transport] using ONLINE ws url:", onlineUrl);
+    return onlineUrl;
+  }
+
+  // 2) Sonst: lokaler Betrieb (Seminar, eigener Laptop)
   const host = window.location.hostname || "localhost";
 
-  const isLocalHost =
+  const isLocal =
     host === "localhost" ||
     host === "127.0.0.1" ||
     host.startsWith("192.168.") ||
     host.startsWith("10.") ||
     host.endsWith(".local");
 
-  if (isLocalHost) {
-    // Lokaler Betrieb auf deinem Mac
+  if (isLocal) {
     const url = `ws://${host}:5174`;
     console.log("[transport] using LOCAL ws url:", url);
     return url;
   }
 
-  // ONLINE-BETRIEB: zuerst Env-Variable von Netlify, sonst Render-URL
-  // (in Netlify: VITE_WS_URL = wss://verhandlung-ws-server.onrender.com)
-  const fromEnv =
-    (import.meta as any).env?.VITE_WS_URL as string | undefined;
-
-  const ONLINE_WS_URL =
-    fromEnv && fromEnv.trim().length > 0
-      ? fromEnv.trim()
-      : "wss://verhandlung-ws-server.onrender.com";
-
-  console.log("[transport] using ONLINE ws url:", ONLINE_WS_URL);
-  return ONLINE_WS_URL;
+  // 3) Notfall-Fallback – falls Env nicht gesetzt ist
+  const fallback = "wss://verhandlung-ws-server.onrender.com";
+  console.warn(
+    "[transport] WARNING: VITE_WS_URL fehlt – nutze Fallback:",
+    fallback
+  );
+  return fallback;
 }
 
 function ensureSocket() {
@@ -153,6 +156,7 @@ function send(msg: AnyMsg) {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(msg));
   } else {
+    // kleiner Retry, falls der Socket noch am Verbinden ist
     setTimeout(() => send(msg), 200);
   }
 }
