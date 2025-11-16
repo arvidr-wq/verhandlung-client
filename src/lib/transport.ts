@@ -93,7 +93,6 @@ let handlers: Array<(msg: AnyMsg) => void> = [];
 function getWebSocketUrl(): string {
   const host = window.location.hostname || "localhost";
 
-  // Erkennen: lokaler Betrieb (Seminar, dein Mac als Server)
   const isLocalHost =
     host === "localhost" ||
     host === "127.0.0.1" ||
@@ -102,15 +101,23 @@ function getWebSocketUrl(): string {
     host.endsWith(".local");
 
   if (isLocalHost) {
-    // wie bisher: dein Mac + Port 5174
-    return `ws://${host}:5174`;
+    // Lokaler Betrieb auf deinem Mac
+    const url = `ws://${host}:5174`;
+    console.log("[transport] using LOCAL ws url:", url);
+    return url;
   }
 
-  // 🔜 ONLINE-BETRIEB:
-  // Hier wird später deine öffentliche WS-URL eingetragen,
-  // z.B. "wss://verhandlung-ws.onrender.com"
-  const ONLINE_WS_URL = "wss://DEIN-WEBSOCKET-SERVER-URL-HIER";
+  // ONLINE-BETRIEB: zuerst Env-Variable von Netlify, sonst Render-URL
+  // (in Netlify: VITE_WS_URL = wss://verhandlung-ws-server.onrender.com)
+  const fromEnv =
+    (import.meta as any).env?.VITE_WS_URL as string | undefined;
 
+  const ONLINE_WS_URL =
+    fromEnv && fromEnv.trim().length > 0
+      ? fromEnv.trim()
+      : "wss://verhandlung-ws-server.onrender.com";
+
+  console.log("[transport] using ONLINE ws url:", ONLINE_WS_URL);
   return ONLINE_WS_URL;
 }
 
