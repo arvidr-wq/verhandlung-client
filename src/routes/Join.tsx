@@ -38,6 +38,16 @@ function clampPercent(v: number): number {
   return v;
 }
 
+// 🔥 NEU: Skalierungs-Funktion für die Argument-Buttons
+// Stärke 1  → kleiner Button
+// Stärke 10 → deutlich größerer Button
+function strengthScale(strength: number): number {
+  const minScale = 0.85;
+  const maxScale = 1.4;
+  const normalized = (strength - 1) / (10 - 1); // 0–1
+  return minScale + normalized * (maxScale - minScale);
+}
+
 const INVEST_OPTIONS = [0, 3, 5, 7, 10];
 
 export default function Join() {
@@ -77,19 +87,13 @@ export default function Join() {
   const isFinished = summary !== null;
 
   useEffect(() => {
-    console.log("[join] subscribe for session", session, "team", team);
-
     const stop = subscribeHost(session, (msg: AnyMsg) => {
-      console.log("[join] incoming", msg);
-
-      // Reveal kommt vom Host, sagt: wie stark wirkt das gegnerische Argument?
       if (msg.type === "reveal" && msg.to === team) {
         setReveal(msg.oppCategory);
         setReactionEnabled(true);
         setStatus("Reveal erhalten – reagiere jetzt.");
       }
 
-      // Host sagt: neue Runde
       if (msg.type === "next") {
         setRound(msg.round);
         setReveal(null);
@@ -101,7 +105,6 @@ export default function Join() {
         setStatus("Neue Runde – bitte Argument wählen.");
       }
 
-      // Host setzt alles zurück
       if (msg.type === "reset") {
         setRound(1);
         setHand(initialHand());
@@ -118,7 +121,6 @@ export default function Join() {
         setTrust(50);
       }
 
-      // Laufende Werte + Abschluss-Auswertung
       if (msg.type === "stateUpdate") {
         const self = team === "A" ? msg.A : msg.B;
         setScore(self.score ?? 0);
@@ -131,9 +133,7 @@ export default function Join() {
       }
     });
 
-    return () => {
-      stop();
-    };
+    return () => stop();
   }, [session, team]);
 
   const sendArg = () => {
@@ -158,10 +158,7 @@ export default function Join() {
 
   const react = (r: Reaction) => {
     if (isFinished || isTrustRound) return;
-    if (!reactionEnabled) {
-      console.log("[join] reaction clicked but not enabled");
-      return;
-    }
+    if (!reactionEnabled) return;
     reactToOpponent(session, {
       who: team,
       reaction: r
@@ -402,23 +399,34 @@ export default function Join() {
             </h2>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-              {hand.map((card) => (
-                <button
-                  key={card.id}
-                  disabled={card.used || argSent}
-                  onClick={() => setSelectedCardId(card.id)}
-                  className={[
-                    "border rounded px-2 py-2 text-xs",
-                    selectedCardId === card.id
-                      ? "border-black"
-                      : "border-gray-300",
-                    card.used ? "bg-gray-200 text-gray-400" : "bg-white"
-                  ].join(" ")}
-                >
-                  Argument {card.id}
-                  <br /> Stärke {card.strength}
-                </button>
-              ))}
+              {hand.map((card) => {
+                const scale = strengthScale(card.strength);
+                const isSelected = selectedCardId === card.id;
+                const disabled = card.used || argSent;
+
+                return (
+                  <button
+                    key={card.id}
+                    disabled={disabled}
+                    onClick={() => setSelectedCardId(card.id)}
+                    className={[
+                      "border rounded px-2 py-2 text-xs transition-transform",
+                      isSelected ? "border-black" : "border-gray-300",
+                      card.used
+                        ? "bg-gray-200 text-gray-400"
+                        : "bg-white"
+                    ].join(" ")}
+                    style={{
+                      transform: `scale(${scale})`,
+                      transformOrigin: "center",
+                      fontWeight: isSelected ? 600 : 400
+                    }}
+                  >
+                    Argument {card.id}
+                    <br /> Stärke {card.strength}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="flex gap-4 text-sm mb-3">
@@ -429,7 +437,7 @@ export default function Join() {
                   onChange={() => setMode("fair")}
                   disabled={argSent}
                 />{" "}
-                fair
+                fair / offen
               </label>
               <label>
                 <input
@@ -438,7 +446,7 @@ export default function Join() {
                   onChange={() => setMode("leicht")}
                   disabled={argSent}
                 />{" "}
-                leicht
+                leicht überzogen
               </label>
               <label>
                 <input
@@ -447,7 +455,7 @@ export default function Join() {
                   onChange={() => setMode("deutlich")}
                   disabled={argSent}
                 />{" "}
-                deutlich
+                stark überzogen
               </label>
             </div>
 
