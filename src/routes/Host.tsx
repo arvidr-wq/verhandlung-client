@@ -19,8 +19,8 @@ type TeamState = {
 };
 
 type InternalState = {
-  played: Partial<Record<Team, { base: number; mode: string }>>;
-  reacted: Partial<Record<Team, string>>;
+  played: Partial<Record<Team, { base: number; mode: "fair" | "leicht" | "deutlich" }>>;
+  reacted: Partial<Record<Team, "annehmen" | "zurückstellen" | "ablehnen">>;
   trustInvest: Partial<Record<Team, number>>; // 0–10 %
 };
 
@@ -46,16 +46,14 @@ function initialTeam(): TeamState {
 }
 
 function initialInternal(): InternalState {
-  return {
-    played: {},
-    reacted: {},
-    trustInvest: {}
-  };
+  return { played: {}, reacted: {}, trustInvest: {} };
 }
 
-// ----------------- Scoring-Helfer -----------------
+// -------------------------------------------------
+// Scoring-Logik
+// -------------------------------------------------
 
-function effectiveStrength(base: number, mode: string): number {
+function effectiveStrength(base: number, mode: "fair" | "leicht" | "deutlich"): number {
   let bonus = 0;
   if (mode === "leicht") bonus = 2;
   if (mode === "deutlich") bonus = 4;
@@ -68,13 +66,13 @@ function categoryOf(str: number): "weak" | "medium" | "strong" {
   return "strong";
 }
 
-function scoreDelta(reaction: string, eff: number): number {
+function scoreDelta(reaction: "annehmen" | "zurückstellen" | "ablehnen", eff: number): number {
   if (reaction === "annehmen") return eff;
   if (reaction === "zurückstellen") return eff * 0.3;
   return -eff * 0.5;
 }
 
-function trustDelta(reaction: string, ownMode: string): number {
+function trustDelta(reaction: "annehmen" | "zurückstellen" | "ablehnen", ownMode: "fair" | "leicht" | "deutlich"): number {
   if (reaction === "annehmen") {
     if (ownMode === "fair") return +8;
     if (ownMode === "leicht") return +5;
@@ -94,11 +92,7 @@ function trustDelta(reaction: string, ownMode: string): number {
   return -5;
 }
 
-function applyRound(
-  internal: InternalState,
-  A: TeamState,
-  B: TeamState
-) {
+function applyRound(internal: InternalState, A: TeamState, B: TeamState) {
   const pA = internal.played["A"];
   const pB = internal.played["B"];
   const rA = internal.reacted["A"];
@@ -124,11 +118,7 @@ function applyRound(
   B.fairScore += pB.base;
 }
 
-function applyTrustRound(
-  internal: InternalState,
-  A: TeamState,
-  B: TeamState
-) {
+function applyTrustRound(internal: InternalState, A: TeamState, B: TeamState) {
   const pA = internal.trustInvest["A"] ?? 0;
   const pB = internal.trustInvest["B"] ?? 0;
 
@@ -157,7 +147,9 @@ function clampPercent(v: number): number {
   return v;
 }
 
-// ----------------- Auswertungs-Helfer -----------------
+// -------------------------------------------------
+// Auswertung / Summary
+// -------------------------------------------------
 
 function computeSummaryForTeam(
   history: RoundRecord[],
@@ -165,9 +157,7 @@ function computeSummaryForTeam(
 ): StateSnapshot["summary"] {
   const opp: Team = team === "A" ? "B" : "A";
 
-  const normalRounds = history.filter(
-    (r) => r[team].reaction !== undefined
-  );
+  const normalRounds = history.filter((r) => r[team].reaction !== undefined);
 
   // Kooperation
   let acc = 0,
@@ -181,9 +171,8 @@ function computeSummaryForTeam(
     else if (react === "ablehnen") rej++;
   }
   const totalReact = acc + delay + rej || 1;
-  const coopRaw =
-    (2 * acc + 1 * delay) / (2 * totalReact); // 0–1
-  let cooperation = clampPercent(coopRaw * 100);
+  const coopRaw = (2 * acc + 1 * delay) / (2 * totalReact); // 0–1
+  const cooperation = clampPercent(coopRaw * 100);
 
   // Fairness
   let fair = 0,
@@ -197,11 +186,10 @@ function computeSummaryForTeam(
     else if (m === "deutlich") strong++;
   }
   const totalMode = fair + light + strong || 1;
-  const fairRaw =
-    (fair + 0.5 * light) / totalMode; // 0–1
-  let fairness = clampPercent(fairRaw * 100);
+  const fairRaw = (fair + 0.5 * light) / totalMode; // 0–1
+  const fairness = clampPercent(fairRaw * 100);
 
-  // Reaktionssensibilität
+  // Reaktionssensibilität (wie stark reagiere ich auf Vertrauen der Gegenseite?)
   let lowTotal = 0,
     lowAcc = 0;
   let highTotal = 0,
@@ -219,12 +207,12 @@ function computeSummaryForTeam(
       if (react === "annehmen") highAcc++;
     }
   }
-  let qLow = lowTotal > 0 ? lowAcc / lowTotal : 0.5;
-  let qHigh = highTotal > 0 ? highAcc / highTotal : 0.5;
+  const qLow = lowTotal > 0 ? lowAcc / lowTotal : 0.5;
+  const qHigh = highTotal > 0 ? highAcc / highTotal : 0.5;
   const sensRaw = (qHigh - qLow + 1) / 2; // 0–1
-  let sensitivity = clampPercent(sensRaw * 100);
+  const sensitivity = clampPercent(sensRaw * 100);
 
-  // Opportunismus
+  // Opportunismus (nutzt hohes eigenes Vertrauen aus?)
   let highTrustRounds = 0;
   let oppPoints = 0;
   for (const r of normalRounds) {
@@ -242,10 +230,14 @@ function computeSummaryForTeam(
   }
   const maxPoints = highTrustRounds * 2 || 1;
   const oppRaw = oppPoints / maxPoints; // 0–1
-  let opportunism = clampPercent(oppRaw * 100);
+  const opportunism = clampPercent(oppRaw * 100);
 
   return { cooperation, fairness, sensitivity, opportunism };
 }
+
+// -------------------------------------------------
+// Host-Komponente
+// -------------------------------------------------
 
 export default function Host() {
   const [sp] = useSearchParams();
@@ -265,10 +257,8 @@ export default function Host() {
   });
   const historyRef = useRef<RoundRecord[]>([]);
 
-  const [summaryA, setSummaryA] =
-    useState<StateSnapshot["summary"] | null>(null);
-  const [summaryB, setSummaryB] =
-    useState<StateSnapshot["summary"] | null>(null);
+  const [summaryA, setSummaryA] = useState<StateSnapshot["summary"] | null>(null);
+  const [summaryB, setSummaryB] = useState<StateSnapshot["summary"] | null>(null);
 
   const setRoundSafe = (n: number) => {
     roundRef.current = n;
@@ -276,36 +266,26 @@ export default function Host() {
   };
 
   const logLine = (msg: string) =>
-    setLog((l) => [msg, ...l]);
+    setLog((l) => [msg, ...l.slice(0, 40)]); // nur die letzten 40 Zeilen
 
-  const getRecord = (round: number): RoundRecord => {
-    const idx = round - 1;
+  const getRecord = (r: number): RoundRecord => {
+    const idx = r - 1;
     if (!historyRef.current[idx]) {
-      historyRef.current[idx] = {
-        round,
-        A: {},
-        B: {}
-      };
+      historyRef.current[idx] = { round: r, A: {}, B: {} };
     }
     return historyRef.current[idx];
   };
 
-  const updateTrustMarkers = (
-    round: number,
-    Acur: TeamState,
-    Bcur: TeamState
-  ) => {
-    const rec = getRecord(round);
+  const updateTrustMarkers = (r: number, Acur: TeamState, Bcur: TeamState) => {
+    const rec = getRecord(r);
     rec.A.trustAfter = Acur.trust;
     rec.B.trustAfter = Bcur.trust;
 
-    const next = round + 1;
+    const next = r + 1;
     if (next <= TOTAL_ROUNDS) {
       const nextRec = getRecord(next);
-      if (nextRec.A.trustBefore === undefined)
-        nextRec.A.trustBefore = Acur.trust;
-      if (nextRec.B.trustBefore === undefined)
-        nextRec.B.trustBefore = Bcur.trust;
+      if (nextRec.A.trustBefore === undefined) nextRec.A.trustBefore = Acur.trust;
+      if (nextRec.B.trustBefore === undefined) nextRec.B.trustBefore = Bcur.trust;
     }
   };
 
@@ -329,7 +309,7 @@ export default function Host() {
       summary: sB
     };
     sendStateUpdate(session, snapA, snapB);
-    logLine("Spiel beendet – Auswertung berechnet.");
+    logLine("Spiel beendet – Auswertung berechnet und an Teams gesendet.");
   };
 
   const goToNextRound = (Acur: TeamState, Bcur: TeamState) => {
@@ -341,13 +321,14 @@ export default function Host() {
     const next = current + 1;
     setRoundSafe(next);
     sendNext(session, next);
-    logLine(`Runde ${current} ausgewertet`);
+    logLine(`Runde ${current} ausgewertet – Runde ${next} gestartet.`);
   };
 
   const resetAllLocal = () => {
     const A0 = initialTeam();
     const B0 = initialTeam();
     const internal = initialInternal();
+
     internalRef.current = internal;
     teamsRef.current = { A: A0, B: B0 };
     historyRef.current = [];
@@ -380,12 +361,9 @@ export default function Host() {
         internal.trustInvest[msg.who] = msg.amount;
         const rec = getRecord(currentRound);
         rec[msg.who].invest = msg.amount;
-        logLine(`Team ${msg.who} investiert ${msg.amount}% in Trust`);
+        logLine(`Team ${msg.who} investiert ${msg.amount}% in Trust (Runde ${currentRound}).`);
 
-        if (
-          internal.trustInvest["A"] !== undefined &&
-          internal.trustInvest["B"] !== undefined
-        ) {
+        if (internal.trustInvest["A"] !== undefined && internal.trustInvest["B"] !== undefined) {
           const Acur: TeamState = { ...teamsRef.current.A };
           const Bcur: TeamState = { ...teamsRef.current.B };
 
@@ -397,44 +375,46 @@ export default function Host() {
 
           updateTrustMarkers(currentRound, Acur, Bcur);
 
-          goToNextRound(Acur, Bcur);
+          const snapA: StateSnapshot = {
+            score: Acur.score,
+            fairScore: Acur.fairScore,
+            trust: Acur.trust
+          };
+          const snapB: StateSnapshot = {
+            score: Bcur.score,
+            fairScore: Bcur.fairScore,
+            trust: Bcur.trust
+          };
+          sendStateUpdate(session, snapA, snapB);
 
+          goToNextRound(Acur, Bcur);
           internal.trustInvest = {};
         }
         return;
       }
 
-      // normale Runden
+      // Normale Runden
       if (!isTrustRound) {
         if (msg.type === "played") {
-          internal.played[msg.who] = {
-            base: msg.base,
-            mode: msg.mode
-          };
+          internal.played[msg.who] = { base: msg.base, mode: msg.mode };
           const rec = getRecord(currentRound);
           rec[msg.who].base = msg.base;
           rec[msg.who].mode = msg.mode;
           logLine(
-            `Team ${msg.who} spielt Stärke ${msg.base} (${msg.mode})`
+            `Team ${msg.who} spielt Argument mit Stärke ${msg.base} (${msg.mode}) in Runde ${currentRound}.`
           );
 
           if (internal.played["A"] && internal.played["B"]) {
             const cA = categoryOf(
-              effectiveStrength(
-                internal.played["B"]!.base,
-                internal.played["B"]!.mode
-              )
+              effectiveStrength(internal.played["B"]!.base, internal.played["B"]!.mode)
             );
             const cB = categoryOf(
-              effectiveStrength(
-                internal.played["A"]!.base,
-                internal.played["A"]!.mode
-              )
+              effectiveStrength(internal.played["A"]!.base, internal.played["A"]!.mode)
             );
 
             sendReveal(session, "A", cA);
             sendReveal(session, "B", cB);
-            logLine("Reveal gesendet");
+            logLine("Reveal an beide Teams gesendet.");
           }
         }
 
@@ -442,9 +422,7 @@ export default function Host() {
           internal.reacted[msg.who] = msg.reaction;
           const rec = getRecord(currentRound);
           rec[msg.who].reaction = msg.reaction;
-          logLine(
-            `Team ${msg.who} reagiert: ${msg.reaction}`
-          );
+          logLine(`Team ${msg.who} reagiert mit „${msg.reaction}“ in Runde ${currentRound}.`);
 
           if (
             internal.reacted["A"] &&
@@ -494,10 +472,7 @@ export default function Host() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
-  const renderSummaryBox = (
-    title: string,
-    summary: StateSnapshot["summary"] | null
-  ) => {
+  const renderSummaryBox = (title: string, summary: StateSnapshot["summary"] | null) => {
     if (!summary) return null;
     const { cooperation, fairness, sensitivity, opportunism } = summary;
 
@@ -507,65 +482,15 @@ export default function Host() {
       return highIsGood ? "hoch" : "niedrig";
     };
 
-    const explain = (label: string, value: number) => {
-      if (label === "Kooperationsindex") {
-        if (value < 33)
-          return "Ihr blockiert die Gegenseite häufig und geht eher selten auf Angebote ein.";
-        if (value < 66)
-          return "Ihr haltet die Balance zwischen Entgegenkommen und Blockieren.";
-        return "Ihr geht meist auf Angebote der Gegenseite ein und spielt deutlich kooperativ.";
-      }
-      if (label === "Fairnessindex") {
-        if (value < 33)
-          return "Ihr spielt eure Argumente häufig stärker aus, als sie eigentlich sind.";
-        if (value < 66)
-          return "Ihr mischt faire und leicht übertriebene Argumente.";
-        return "Ihr spielt eure Argumente überwiegend fair und nur selten übertrieben.";
-      }
-      if (label === "Reaktionssensibilität") {
-        if (value < 33)
-          return "Euer Verhalten verändert sich kaum, wenn Vertrauen steigt oder sinkt.";
-        if (value < 66)
-          return "Ihr reagiert teilweise auf Veränderungen im Vertrauen der Gegenseite.";
-        return "Ihr reagiert deutlich auf Vertrauensaufbau der Gegenseite und passt euer Verhalten entsprechend an.";
-      }
-      if (label === "Opportunismusindex") {
-        if (value < 33)
-          return "Ihr nutzt Vertrauen der Gegenseite kaum für kurzfristige Vorteile aus.";
-        if (value < 66)
-          return "Ihr nutzt Chancen situativ, ohne durchgehend opportunistisch zu agieren.";
-        return "Ihr nutzt hohes Vertrauen der Gegenseite häufig für eigene Vorteile.";
-      }
-      return "";
-    };
-
     return (
       <div className="border rounded-xl p-4 bg-white shadow mt-4">
-        <h3 className="font-semibold mb-2 text-sm">
-          Auswertung – {title}
-        </h3>
+        <h3 className="font-semibold mb-2 text-sm">Auswertung – {title}</h3>
 
         {[
-          {
-            label: "Kooperationsindex",
-            value: cooperation,
-            good: true
-          },
-          {
-            label: "Fairnessindex",
-            value: fairness,
-            good: true
-          },
-          {
-            label: "Reaktionssensibilität",
-            value: sensitivity,
-            good: true
-          },
-          {
-            label: "Opportunismusindex",
-            value: opportunism,
-            good: false
-          }
+          { label: "Kooperationsindex", value: cooperation, good: true },
+          { label: "Fairnessindex", value: fairness, good: true },
+          { label: "Reaktionssensibilität", value: sensitivity, good: true },
+          { label: "Opportunismusindex", value: opportunism, good: false }
         ].map((item) => (
           <div key={item.label} className="mb-3">
             <div className="flex justify-between text-xs mb-1">
@@ -578,11 +503,8 @@ export default function Host() {
                 style={{ width: `${clampPercent(item.value)}%` }}
               />
             </div>
-            <div className="text-[11px] text-gray-600 mb-0.5">
+            <div className="text-[11px] text-gray-600">
               Niveau: {level(item.value, item.good)}
-            </div>
-            <div className="text-[11px] text-gray-700">
-              {explain(item.label, item.value)}
             </div>
           </div>
         ))}
@@ -600,9 +522,7 @@ export default function Host() {
       <h1 className="text-2xl font-semibold mb-2">
         Host – Runde {round}/{TOTAL_ROUNDS}
       </h1>
-      <p className="text-xs text-gray-500 mb-6 font-mono">
-        Session: {session}
-      </p>
+      <p className="text-xs text-gray-500 mb-6 font-mono">Session: {session}</p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         {/* TEAM A */}
@@ -610,8 +530,7 @@ export default function Host() {
           <div className="flex justify-between mb-1">
             <span className="font-semibold">Team A</span>
             <span className="text-sm">
-              Score: {teamA.score.toFixed(1)} / Fair:{" "}
-              {teamA.fairScore.toFixed(1)}
+              Score: {teamA.score.toFixed(1)} / Fair: {teamA.fairScore.toFixed(1)}
             </span>
           </div>
 
@@ -638,9 +557,7 @@ export default function Host() {
               style={{ width: `${clampPercent(teamA.trust)}%` }}
             />
           </div>
-          <div className="text-xs text-gray-600">
-            Trust: {teamA.trust.toFixed(0)}
-          </div>
+          <div className="text-xs text-gray-600">Trust: {teamA.trust.toFixed(0)}</div>
 
           {renderSummaryBox("Team A", summaryA)}
         </div>
@@ -650,8 +567,7 @@ export default function Host() {
           <div className="flex justify-between mb-1">
             <span className="font-semibold">Team B</span>
             <span className="text-sm">
-              Score: {teamB.score.toFixed(1)} / Fair:{" "}
-              {teamB.fairScore.toFixed(1)}
+              Score: {teamB.score.toFixed(1)} / Fair: {teamB.fairScore.toFixed(1)}
             </span>
           </div>
 
@@ -678,9 +594,7 @@ export default function Host() {
               style={{ width: `${clampPercent(teamB.trust)}%` }}
             />
           </div>
-          <div className="text-xs text-gray-600">
-            Trust: {teamB.trust.toFixed(0)}
-          </div>
+          <div className="text-xs text-gray-600">Trust: {teamB.trust.toFixed(0)}</div>
 
           {renderSummaryBox("Team B", summaryB)}
         </div>
@@ -688,11 +602,11 @@ export default function Host() {
 
       {/* LOG */}
       <div className="border rounded-xl p-4 bg-white shadow">
-        <h2 className="font-semibold mb-2 text-sm">Log</h2>
+        <h2 className="font-semibold mb-2 text-sm">Log (Host)</h2>
         {log.length === 0 ? (
           <p className="text-xs text-gray-500">Keine Aktionen bisher.</p>
         ) : (
-          <ul className="text-xs space-y-1">
+          <ul className="text-xs space-y-1 max-h-64 overflow-auto">
             {log.map((item, i) => (
               <li key={i}>{item}</li>
             ))}
