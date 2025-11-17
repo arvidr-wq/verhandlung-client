@@ -38,16 +38,6 @@ function clampPercent(v: number): number {
   return v;
 }
 
-// 🔥 NEU: Skalierungs-Funktion für die Argument-Buttons
-// Stärke 1  → kleiner Button
-// Stärke 10 → deutlich größerer Button
-function strengthScale(strength: number): number {
-  const minScale = 0.85;
-  const maxScale = 1.4;
-  const normalized = (strength - 1) / (10 - 1); // 0–1
-  return minScale + normalized * (maxScale - minScale);
-}
-
 const INVEST_OPTIONS = [0, 3, 5, 7, 10];
 
 export default function Join() {
@@ -58,16 +48,13 @@ export default function Join() {
   const [round, setRound] = useState(1);
   const [hand, setHand] = useState<Card[]>(initialHand);
 
-  const [selectedCardId, setSelectedCardId] = useState<number | null>(
-    null
-  );
+  const [selectedCardId, setSelectedCardId] = useState<number | null>(null);
   const selectedCard = hand.find((c) => c.id === selectedCardId) ?? null;
 
   const [mode, setMode] = useState<Mode>("fair");
   const [argSent, setArgSent] = useState(false);
 
-  const [reveal, setReveal] =
-    useState<null | "weak" | "medium" | "strong">(null);
+  const [reveal, setReveal] = useState<null | "weak" | "medium" | "strong">(null);
   const [reactionEnabled, setReactionEnabled] = useState(false);
   const [status, setStatus] = useState<string>(
     "Wähle ein Argument und sende es."
@@ -171,10 +158,7 @@ export default function Join() {
     if (isFinished || !isTrustRound) return;
     if (investSent) return;
 
-    const clean = Math.max(
-      0,
-      Math.min(10, Math.round(selectedInvest))
-    );
+    const clean = Math.max(0, Math.min(10, Math.round(selectedInvest)));
     sendTrustInvest(session, team, clean);
     setInvestSent(true);
     setStatus(
@@ -186,6 +170,54 @@ export default function Join() {
   const scorePercent = clampPercent(score);
   const fairPercent = clampPercent(fairScore);
   const trustPercent = clampPercent(trust);
+
+  // -------------------------------
+  // Optik der Argumentkarten
+  // -------------------------------
+  function cardClasses(card: Card): string {
+    let bg = "";
+    let border = "border-gray-300";
+    let text = "text-gray-900";
+
+    if (card.strength <= 3) {
+      // schwach
+      bg = "bg-blue-50";
+      border = "border-blue-200";
+    } else if (card.strength <= 7) {
+      // mittel
+      bg = "bg-yellow-50";
+      border = "border-yellow-200";
+    } else {
+      // stark
+      bg = "bg-red-50";
+      border = "border-red-200";
+    }
+
+    if (card.used) {
+      bg = "bg-gray-100";
+      text = "text-gray-400";
+      border = "border-gray-200";
+    }
+
+    const selected = selectedCardId === card.id ? "ring-2 ring-black" : "";
+
+    // leichte Größenvariation nach Stärke
+    const size =
+      card.strength >= 9
+        ? "py-3"
+        : card.strength >= 6
+        ? "py-2.5"
+        : "py-2";
+
+    return [
+      "w-full text-left rounded-lg border px-3",
+      size,
+      bg,
+      border,
+      text,
+      selected
+    ].join(" ");
+  }
 
   const renderSummary = () => {
     if (!summary) return null;
@@ -230,26 +262,10 @@ export default function Join() {
     };
 
     const items = [
-      {
-        label: "Kooperationsindex",
-        value: cooperation,
-        good: true
-      },
-      {
-        label: "Fairnessindex",
-        value: fairness,
-        good: true
-      },
-      {
-        label: "Reaktionssensibilität",
-        value: sensitivity,
-        good: true
-      },
-      {
-        label: "Opportunismusindex",
-        value: opportunism,
-        good: false
-      }
+      { label: "Kooperationsindex", value: cooperation, good: true },
+      { label: "Fairnessindex", value: fairness, good: true },
+      { label: "Reaktionssensibilität", value: sensitivity, good: true },
+      { label: "Opportunismusindex", value: opportunism, good: false }
     ];
 
     return (
@@ -258,9 +274,9 @@ export default function Join() {
           Auswertung deines Spielstils
         </h2>
         <p className="text-xs text-gray-600 mb-3">
-          Alle Werte liegen zwischen 0 und 100. 50 ist der neutrale
-          Bereich. Höhere Werte bedeuten mehr von der jeweiligen
-          Eigenschaft (beim Opportunismus eher vorsichtig interpretieren).
+          Alle Werte liegen zwischen 0 und 100. 50 ist der neutrale Bereich.
+          Höhere Werte bedeuten mehr von der jeweiligen Eigenschaft
+          (beim Opportunismus eher vorsichtig interpretieren).
         </p>
 
         {items.map((item) => (
@@ -288,9 +304,9 @@ export default function Join() {
         ))}
 
         <p className="text-xs text-gray-700 mt-3">
-          Nutzt diese Auswertung im Plenum: Wo habt ihr Vertrauen
-          aufgebaut, wo eher gepokert, wo liegen Chancen, euch
-          kooperativer oder strategischer aufzustellen?
+          Nutzt diese Auswertung im Plenum: Wo habt ihr Vertrauen aufgebaut,
+          wo eher gepokert, wo liegen Chancen, euch kooperativer oder
+          strategischer aufzustellen?
         </p>
       </section>
     );
@@ -399,34 +415,21 @@ export default function Join() {
             </h2>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-              {hand.map((card) => {
-                const scale = strengthScale(card.strength);
-                const isSelected = selectedCardId === card.id;
-                const disabled = card.used || argSent;
-
-                return (
-                  <button
-                    key={card.id}
-                    disabled={disabled}
-                    onClick={() => setSelectedCardId(card.id)}
-                    className={[
-                      "border rounded px-2 py-2 text-xs transition-transform",
-                      isSelected ? "border-black" : "border-gray-300",
-                      card.used
-                        ? "bg-gray-200 text-gray-400"
-                        : "bg-white"
-                    ].join(" ")}
-                    style={{
-                      transform: `scale(${scale})`,
-                      transformOrigin: "center",
-                      fontWeight: isSelected ? 600 : 400
-                    }}
-                  >
+              {hand.map((card) => (
+                <button
+                  key={card.id}
+                  disabled={card.used || argSent}
+                  onClick={() => setSelectedCardId(card.id)}
+                  className={cardClasses(card)}
+                >
+                  <div className="text-[11px] font-medium">
                     Argument {card.id}
-                    <br /> Stärke {card.strength}
-                  </button>
-                );
-              })}
+                  </div>
+                  <div className="text-xs">
+                    Stärke {card.strength}
+                  </div>
+                </button>
+              ))}
             </div>
 
             <div className="flex gap-4 text-sm mb-3">
